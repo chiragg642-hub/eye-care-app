@@ -749,5 +749,8 @@ if __name__ == "__main__":
     load_settings()
     initialize_root()
     threading.Thread(target=setup_tray, daemon=True).start()
+    if getattr(sys, "frozen", False):
+        root.after(0, start_tracker)
     root.mainloop()
+
 
