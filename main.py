@@ -53,7 +53,8 @@ tray_icon = None
 break_window_ref = None
 break_snooze_timer = None
 
-SETTINGS_FILE = "settings.json"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
 
 COLORS = {
     "bg": "#F5F7FA",
@@ -170,12 +171,6 @@ def get_idle_time():
     return millis / 1000.0
 
 
-def is_screen_on():
-    if os.name != "nt":
-        return False
-    return ctypes.windll.user32.GetForegroundWindow() != 0
-
-
 def is_audio_playing():
     if AudioUtilities is None:
         return False
@@ -270,11 +265,11 @@ def _open_settings_ui():
     }
 
     with settings_lock:
-        current_idle = settings["idle_threshold"]
-        current_work = settings["work_interval"]
-        current_break = settings["break_duration"]
-        current_mode = settings["break_mode"]
-        current_snooze = settings["snooze_minutes"]
+        current_idle = settings.get("idle_threshold", 120)
+        current_work = settings.get("work_interval", 1200)
+        current_break = settings.get("break_duration", 20)
+        current_mode = settings.get("break_mode", "full_screen")
+        current_snooze = settings.get("snooze_minutes", 5)
 
     idle_reverse = {v: k for k, v in idle_options.items()}
     work_reverse = {v: k for k, v in work_options.items()}
@@ -315,15 +310,24 @@ def _open_settings_ui():
     def save():
         try:
             with settings_lock:
-                settings["idle_threshold"] = idle_options[idle_var.get()]
-                settings["work_interval"] = work_options[work_var.get()]
-                settings["break_duration"] = break_options[break_var.get()]
-                settings["break_mode"] = mode_options[mode_var.get()]
-                settings["snooze_minutes"] = snooze_options[snooze_var.get()]
-                save_settings_to_file()
+                updated = {
+                    "idle_threshold": idle_options[idle_var.get()],
+                    "work_interval": work_options[work_var.get()],
+                    "break_duration": break_options[break_var.get()],
+                    "break_mode": mode_options[mode_var.get()],
+                    "snooze_minutes": snooze_options[snooze_var.get()],
+                }
+                previous = settings.copy()
+                settings.update(updated)
+                try:
+                    save_settings_to_file()
+                except OSError:
+                    settings.clear()
+                    settings.update(previous)
+                    raise
             close_window()
         except Exception:
-            messagebox.showerror("Save Error", "Could not save settings.")
+            messagebox.showerror("Save Error", "Could not save settings. Check that the app folder is writable.")
 
     # Use a regular tk.Button for predictable coloring across platforms
     save_button = tk.Button(
@@ -345,24 +349,61 @@ def open_settings(icon=None, item=None):
 
 
 def load_settings():
+    """Load known, valid values; ignore invalid entries and retain safe defaults."""
     global settings
 
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
-                loaded = json.load(file)
-                if isinstance(loaded, dict):
-                    settings.update(loaded)
-        except (OSError, ValueError, TypeError):
-            logging.warning("Could not load settings file, using defaults.")
+    defaults = {
+        "idle_threshold": 120,
+        "work_interval": 1200,
+        "break_duration": 20,
+        "break_mode": "full_screen",
+        "snooze_minutes": 5,
+    }
+    allowed = {
+        "idle_threshold": {60, 120, 180, 300, 600},
+        "work_interval": {600, 1200, 1800, 2400, 3600},
+        "break_duration": {20, 30, 60, 120},
+        "break_mode": {"notification", "full_screen"},
+        "snooze_minutes": {2, 5, 10, 15, 30},
+    }
+    loaded = {}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        if isinstance(data, dict):
+            for key, options in allowed.items():
+                value = data.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value in options:
+                    loaded[key] = value
+                elif isinstance(value, str) and value in options:
+                    loaded[key] = value
+                elif key in data:
+                    logging.warning("Ignoring invalid setting: %s", key)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError):
+        logging.warning("Could not read settings file; using defaults.")
+
+    settings = {**defaults, **loaded}
 
 
 def save_settings_to_file():
+    """Write settings atomically so interruption cannot leave a partial JSON file."""
+    temporary_path = SETTINGS_FILE + ".tmp"
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-            json.dump(settings, file)
+        with open(temporary_path, "w", encoding="utf-8") as file:
+            json.dump(settings, file, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, SETTINGS_FILE)
     except OSError:
+        try:
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
+        except OSError:
+            logging.exception("Could not remove temporary settings file")
         logging.exception("Could not write settings file")
+        raise
 
 # ---------------- TRACKER ---------------- #
 
@@ -376,47 +417,37 @@ def tracker():
             logging.exception("COM initialization failed")
 
     logging.info("Tracker started...")
+    previous_tick = time.monotonic()
+    try:
+        while running:
+            with settings_lock:
+                idle_threshold = settings["idle_threshold"]
+                work_interval = settings["work_interval"]
 
-    while running:
-        with settings_lock:
-            idle_threshold = settings["idle_threshold"]
-            work_interval = settings["work_interval"]
+            now = time.monotonic()
+            elapsed = max(0.0, now - previous_tick)
+            previous_tick = now
+            idle = get_idle_time()
+            audio = is_audio_playing()
 
-        idle = get_idle_time()
-        screen_on = is_screen_on()
-        audio = is_audio_playing()
+            # Count active input, or active audio when the user is away from input.
+            active = idle < idle_threshold or audio
+            if active:
+                screen_time += elapsed
 
-        # Determine whether we consider the session active. Audio overrides idle.
-        active = screen_on and (idle < idle_threshold or audio)
+            if screen_time >= work_interval:
+                logging.info("Work interval reached; triggering break")
+                break_timer()
+                screen_time = 0.0
 
-        # For display/logging, when audio is playing treat effective idle as 0
-        # so the status shows activity due to audio (this does not change OS idle).
-        if audio and screen_on:
-            idle_display = 0.0
-            active_reason = "audio"
-        else:
-            idle_display = idle
-            active_reason = "input" if idle < idle_threshold else "idle"
-
-        # No temporary debug output; keep normal tracker behavior
-
-        if active:
-            screen_time += 1
-
-        if screen_time >= work_interval:
-            logging.info("Work interval reached; triggering break")
-            break_timer()
-            screen_time = 0
-
-        time.sleep(1)
-
-    if comtypes is not None:
-        try:
-            comtypes.CoUninitialize()
-        except Exception:
-            logging.exception("COM cleanup failed")
-
-    logging.info("Tracker stopped.")
+            time.sleep(1.0)
+    finally:
+        if comtypes is not None:
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                logging.exception("COM cleanup failed")
+        logging.info("Tracker stopped.")
 
 
 def _show_notification_end_ui(message):

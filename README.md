@@ -1,41 +1,29 @@
 # Eye Care App
 
-A lightweight Windows helper app that reminds you to take eye breaks during long screen sessions.
+A lightweight Windows tray app for the 20-20-20 eye-break habit: after 20 minutes of active computer use, look away from the screen for 20 seconds.
 
 ## Features
 
-- Tracks active computer usage using Windows idle detection
-- Uses audio activity as an extra signal that the user is still engaged
-- Lets you choose between a notification-style break and a full-screen blackout reminder
-- Includes snooze support for high-focus or urgent tasks
-- Saves settings to `settings.json`
-- Runs quietly from the system tray
+- Tracks Windows idle time and counts active use toward the work interval
+- Treats active audio as an additional sign of engagement, which can help during video playback
+- Shows a notification or a full-screen break reminder with a countdown
+- Lets you snooze a reminder
+- Saves validated settings beside `main.py`, so launching from a shortcut uses the same settings
+- Runs from the Windows system tray
 
-## Install
+## Install and run
 
 ```powershell
 python -m pip install -r requirements.txt
-```
-
-## Run
-
-```powershell
 python main.py
 ```
 
-## Startup behavior
+Use the tray menu's **Start** item to begin tracking. The app does not start tracking until you choose Start. The default work interval is 20 minutes and the default break is 20 seconds; adjust both in **Settings** if needed.
 
-This app is intentionally kept lightweight and simple.
+## Start with Windows
 
-To make it start automatically with Windows, use the standard Windows startup method instead of adding startup logic into the app itself:
-
-1. Open Task Manager
-2. Go to Startup apps
-3. Find the app entry or add a shortcut to the app in the Startup folder if needed
-4. Enable it to launch at startup
-
-This keeps the program as a normal helper app instead of a system-like background service.
+To launch the app automatically, place a shortcut to `main.py` (or to a packaged app, if you create one) in the Windows Startup folder. After launch, choose **Start** from the tray menu.
 
 ## Notes
 
-This app is designed for Windows because it uses Win32 APIs and `pycaw` for audio detection.
+This app is designed for Windows. It uses Windows idle detection and `pycaw` audio session information. Audio can count as engagement even when no one is looking at the screen, so use the idle threshold or disable audio playback when you want reminders based only on keyboard and mouse activity.
