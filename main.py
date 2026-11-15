@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -53,7 +54,13 @@ tray_icon = None
 break_window_ref = None
 break_snooze_timer = None
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "EyeCareApp")
+    os.makedirs(APP_DIR, exist_ok=True)
+    BUNDLED_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    BUNDLED_SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
 SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
 
 COLORS = {
@@ -367,8 +374,11 @@ def load_settings():
         "snooze_minutes": {2, 5, 10, 15, 30},
     }
     loaded = {}
+    settings_source = SETTINGS_FILE
+    if not os.path.exists(settings_source) and getattr(sys, "frozen", False):
+        settings_source = BUNDLED_SETTINGS_FILE
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
+        with open(settings_source, "r", encoding="utf-8") as file:
             data = json.load(file)
         if isinstance(data, dict):
             for key, options in allowed.items():
@@ -651,16 +661,28 @@ def break_timer():
 
 # ---------------- CONTROL ---------------- #
 
+def update_tray_menu():
+    """Refresh enabled states after tracker state changes outside menu rendering."""
+    if tray_icon is not None:
+        try:
+            tray_icon.update_menu()
+        except Exception:
+            logging.exception("Could not refresh tray menu")
+
+
 def start_tracker(icon=None, item=None):
     global running
     if not running:
         running = True
         threading.Thread(target=tracker, daemon=True).start()
+        update_tray_menu()
 
 
 def stop_tracker(icon=None, item=None):
     global running
-    running = False
+    if running:
+        running = False
+        update_tray_menu()
 
 
 def quit_app(icon=None, item=None):
@@ -713,8 +735,8 @@ def setup_tray():
     tray_icon.icon = create_icon()
     tray_icon.title = "Eye Care App"
     tray_icon.menu = pystray.Menu(
-        item("Start", start_tracker),
-        item("Stop", stop_tracker),
+        item("Start", start_tracker, enabled=lambda menu_item: not running),
+        item("Stop", stop_tracker, enabled=lambda menu_item: running),
         item("Settings", open_settings),
         item("Exit", quit_app),
     )
@@ -728,3 +750,4 @@ if __name__ == "__main__":
     initialize_root()
     threading.Thread(target=setup_tray, daemon=True).start()
     root.mainloop()
+

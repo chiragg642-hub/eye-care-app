@@ -1,1 +1,7 @@
-{"idle_threshold": 60, "work_interval": 1200, "break_duration": 20, "break_mode": "notification", "snooze_minutes": 5}
+{
+  "idle_threshold": 60,
+  "work_interval": 600,
+  "break_duration": 20,
+  "break_mode": "full_screen",
+  "snooze_minutes": 5
+}
